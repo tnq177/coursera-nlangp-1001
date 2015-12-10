@@ -4,15 +4,22 @@ import sys
 from decimal import *
 import pdb
 from math import log
+import re
 
 
 class HMM(object):
 
-    def __init__(self, count_file_handle):
+    def __init__(self, count_file_handle, multi_rare=False):
         self.emissions = {}
         self.word_count = {}
         self.ngrams = {1: {}, 2: {}, 3: {}}
-        self._RARE_ = '_RARE_'
+        self.multi_rare = multi_rare
+        if multi_rare:
+            self._RARE_ = ['_NUMERIC_', '_ALL_CAPITALS_', '_LAST_CAPITAL', '_RARE_']
+        else:
+            self._RARE_ = ['_RARE_']
+
+        self.re_d = re.compile('\d')
 
         for line in count_file_handle:
             arr = line.replace('\n', '')
@@ -41,7 +48,7 @@ class HMM(object):
         for word, count in self.word_count.iteritems():
             if count < 5:
                 for tag in self.tags:
-                    rare_key = (tag, self._RARE_)
+                    rare_key = (tag, self.replace_word(word))
                     key = (tag, word)
                     self.emissions.setdefault(rare_key, 0)
                     self.emissions[rare_key] += self.emissions.get(key, 0)
@@ -58,7 +65,17 @@ class HMM(object):
 
     def replace_word(self, word):
         if self.word_count.get(word, 0) < 5:
-            return self._RARE_
+            if self.multi_rare:
+                if self.re_d.search(word):
+                    return self._RARE_[0]
+                elif word.isupper():
+                    return self._RARE_[1]
+                elif word[-1].isupper():
+                    return self._RARE_[2]
+                else:
+                    return self._RARE_[3]
+            else:
+                return self._RARE_[0]
         else:
             return word
 
@@ -138,6 +155,10 @@ def main(partId, test_file, out_file):
         max_tags = unigram(hmm, sentence_without_empty_word)
     elif partId == '2':
         max_tags = viberti(hmm, sentence_without_empty_word)
+    elif partId == '3':
+        count_file_handle = open('./gene.counts', 'r')
+        hmm = HMM(count_file_handle, multi_rare=True)
+        max_tags = viberti(hmm, sentence_without_empty_word)
 
     out_data = ''
     counter = 0
@@ -153,7 +174,7 @@ def main(partId, test_file, out_file):
     out_file_handle.close()
 
 if __name__ == '__main__':
-    if len(sys.argv) < 3:
+    if len(sys.argv) < 4:
         sys.exit(1)
     else:
         main(sys.argv[1], sys.argv[2], sys.argv[3])
