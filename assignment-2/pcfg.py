@@ -93,7 +93,7 @@ class PCFG(object):
                     for key, count in self.binary_count.iteritems():
                         X, Y, Z = key
                         max_prob.setdefault(X, -1)
-                        max_nonterminals.setdefault(X, '')
+                        max_nonterminals.setdefault(X, None)
 
                         prob = Decimal(self.binary_prob(key)) * pi.get((i, s, Y), Decimal(0)) * pi.get((s + 1, j, Z), Decimal(0))
 
@@ -160,11 +160,18 @@ def main(args):
     if len(args) < 2:
         sys.exit(1)
 
-    pcfg = PCFG('./cfg.counts')
+    partId = args[1]
+    pcfg = None
+    if partId in ['1', '2']:
+        pcfg = PCFG('./cfg.counts')
+    elif partId == '3':
+        pcfg = PCFG('./cfg_vert.counts')
+    else:
+        sys.exit(1)
 
-    if args[1] == '1':
+    if partId == '1':
         write_new_count_file(pcfg)
-    elif args[1] == '2':
+    elif partId in ['2', '3']:
         if len(args) < 4:
             sys.exit(1)
 
@@ -181,7 +188,6 @@ def main(args):
 
         test_file_handle.close()
         out_file_handle.close()
-
     else:
         print('Not implemented!')
 
