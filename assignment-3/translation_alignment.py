@@ -5,30 +5,49 @@ import pickle
 from os.path import isfile, exists
 from itertools import izip
 import timeit
+import numpy
 
-class IBM1(object):
 
-    def __init__(self, source_corpus, target_corpus, pickle_file):
-        # Really dumb way to determine if there is a pretrained model saved in
-        # file
-        if exists(pickle_file) and isfile(pickle_file):
-            print('Loading pretrained model')
-            with open(pickle_file, 'r') as f:
-                self.t = pickle.load(f)
+class IBM(object):
+
+    def __init__(self, source_corpus, target_corpus, model_number):
+        self.model_number = model_number
+
+        has_pretrained = False
+        if model_number == 1:
+            has_pretrained = exists(
+                './tfe-1.pickle') and isfile('./tfe-1.pickle')
         else:
-            print('Training')
-            self.train(source_corpus, target_corpus, pickle_file)
+            t_file, q_file = self._get_pickle_files(source_corpus)
+            has_pretrained = exists(t_file) and isfile(
+                t_file) and exists(q_file) and isfile(q_file)
 
-    def train(self, source_corpus, target_corpus, pickle_file):
+        if has_pretrained:
+            print('Loading pretrained model')
+            if model_number == 1:
+                with open('./tfe-1.pickle', 'r') as f:
+                    self.t = pickle.load(f)
+            else:
+                t_file, q_file = self._get_pickle_files(source_corpus)
+
+                with open(t_file, 'r') as tfe_file, open(q_file, 'r') as q_file:
+                    self.t = pickle.load(tfe_file)
+                    self.q = pickle.load(q_file)
+        else:
+            print('Training model {0}'.format(model_number))
+            if model_number == 1:
+                self.train_1(source_corpus, target_corpus)
+            else:
+                self.train_2(source_corpus, target_corpus)
+
+    def _get_pickle_files(self, source_corpus):
+        if source_corpus.endswith('es'):
+            return './tfe-2.pickle', './qfe.pickle'
+        else:
+            return './tef-2.pickle', './qef.pickle'
+
+    def _init_t(self, source_file, target_file):
         self.t = {}
-
-        f = open(source_corpus, 'r')
-        source_file = f.readlines()
-        f.close()
-        f = open(target_corpus, 'r')
-        target_file = f.readlines()
-        f.close()
-
         # Calculate n(e)
         for src, tar in izip(source_file, target_file):
             src_sent = src.strip()
@@ -53,6 +72,16 @@ class IBM1(object):
             for key in self.t[e]:
                 self.t[e][key] = value
 
+    def train_1(self, source_corpus, target_corpus):
+        f = open(source_corpus, 'r')
+        source_file = f.readlines()
+        f.close()
+        f = open(target_corpus, 'r')
+        target_file = f.readlines()
+        f.close()
+
+        self._init_t(source_file, target_file)
+
         def t(f, e):
             self.t.setdefault(e, {})
             self.t[e].setdefault(f, 0.0)
@@ -60,6 +89,7 @@ class IBM1(object):
             return self.t[e][f]
 
         # Train with EM algorithm
+        print('Training model 1')
         S = 5
         for s in xrange(0, S):
             print('Iteration: {0}'.format(s + 1))
@@ -100,16 +130,125 @@ class IBM1(object):
                     self.t[e][f] = c[e, f] / c[e]
 
         # Save trained parameters to pickle file
-        open(pickle_file, 'w').close()
+        t_file_name = ''
+        if self.model_number == 1:
+            t_file_name = './tfe-1.pickle'
+        else:
+            if source_corpus.endswith('.es'):
+                t_file_name = './tfe-2.pickle'
+            else:
+                t_file_name = './tef-2.pickle'
+
+        open(t_file_name, 'w').close()
         print('Save trained parameters to pickle file')
-        with open(pickle_file, 'w') as f:
+        with open(t_file_name, 'w') as f:
             pickle.dump(self.t, f)
 
         print('Done')
 
-    def align(self, src_test_corpus, tar_test_corpus, out_alignment_file):
+    def train_2(self, source_corpus, target_corpus):
+        f = open(source_corpus, 'r')
+        source_file = f.readlines()
+        f.close()
+        f = open(target_corpus, 'r')
+        target_file = f.readlines()
+        f.close()
+
+        # Should use the trained parameters from model 1
+        # In case it does not exist, train it
+        t_file, q_file = self._get_pickle_files(source_corpus)
+        if exists(t_file) and isfile(t_file):
+            with open(t_file) as f:
+                self.t = pickle.load(f)
+        else:
+            self.train_1(source_corpus, target_corpus)
+
+        # Init self.q
+        self.q = {}
+        for src, tar in izip(source_file, target_file):
+            src_sent = src.strip()
+            tar_sent = tar.strip()
+
+            if not src_sent or not tar_sent:
+                continue
+
+            src_sent = src_sent.split(' ')
+            tar_sent = tar_sent.split(' ')
+            m = len(src_sent)
+            l = len(tar_sent)
+
+            for i in xrange(1, m + 1):
+                for j in xrange(0, l + 1):
+                    self.q[j, i, l, m] = 1.0 / (l + 1)
+
+        def t(f, e):
+            self.t.setdefault(e, {})
+            self.t[e].setdefault(f, 0.0)
+
+            return self.t[e][f]
+
+        def q(j, i, l, m):
+            self.q.setdefault((j, i, l, m), 0.0)
+            return self.q[j, i, l, m]
+
+        # Train with EM algorithm
+        S = 5
+        for s in xrange(0, S):
+            print('Iteration: {0}'.format(s + 1))
+            c = {}
+            for src, tar in izip(source_file, target_file):
+                src_sent = src.strip()
+                tar_sent = tar.strip()
+
+                if not src_sent or not tar_sent:
+                    continue
+
+                src_sent = src_sent.split(' ')
+                tar_sent = tar_sent.split(' ')
+
+                mk = len(src_sent)
+                lk = len(tar_sent)
+
+                src_sent = [''] + src_sent
+                tar_sent = ['NULL'] + tar_sent
+
+                for i in xrange(1, mk + 1):
+                    for j in xrange(0, lk + 1):
+                        fik = src_sent[i]
+                        ejk = tar_sent[j]
+
+                        denominator = 0.0
+                        for _j in xrange(0, lk + 1):
+                            _ejk = tar_sent[_j]
+                            denominator += q(_j, i, lk, mk) * t(fik, _ejk)
+
+                        delta = t(fik, ejk) * q(j, i, lk, mk) / denominator
+
+                        c[ejk, fik] = c.get((ejk, fik), 0.0) + delta
+                        c[ejk] = c.get(ejk, 0.0) + delta
+                        c[j, i, lk, mk] = c.get(
+                            (j, i, lk, mk), 0.0) + delta
+                        c[i, lk, mk] = c.get((i, lk, mk), 0.0) + delta
+
+            for e in self.t:
+                for f in self.t[e]:
+                    self.t[e][f] = c[e, f] / c[e]
+
+            for key in self.q:
+                self.q[key] = c[key] / c[key[1:]]
+
+        # Save trained parameters to pickle file
+        open(t_file, 'w').close()
+        open(q_file, 'w').close()
+        print('Save trained parameters to pickle files')
+        with open(t_file, 'w') as t_pickle_file, open(q_file, 'w') as q_pickle_file:
+            pickle.dump(self.t, t_pickle_file)
+            pickle.dump(self.q, q_pickle_file)
+
+        print('Done')
+
+    def align(self, src_test_corpus, tar_test_corpus):
         print('Aligning')
-        open(out_alignment_file, 'w').close()
 
         def t(f, e):
             self.t.setdefault(e, {})
@@ -117,54 +256,158 @@ class IBM1(object):
 
             return self.t[e][f]
 
-        with open(out_alignment_file, 'w') as output_file:
-            with open(src_test_corpus, 'r') as source_file, open(tar_test_corpus, 'r') as target_file:
-                sent_index = 0
-                for src_sent, tar_sent in izip(source_file, target_file):
-                    src_sent = src_sent.strip()
-                    tar_sent = tar_sent.strip()
+        def q(j, i, l, m):
+            self.q.setdefault((j, i, l, m), 0.0)
 
-                    if not src_sent or not tar_sent:
+            return self.q[j, i, l, m]
+
+        result = {}
+        with open(src_test_corpus, 'r') as source_file, open(tar_test_corpus, 'r') as target_file:
+            sent_index = 0
+            for src_sent, tar_sent in izip(source_file, target_file):
+                src_sent = src_sent.strip()
+                tar_sent = tar_sent.strip()
+
+                if not src_sent or not tar_sent:
+                    continue
+
+                sent_index += 1
+                src_sent = src_sent.split(' ')
+                tar_sent = tar_sent.split(' ')
+
+                l = len(tar_sent)
+                m = len(src_sent)
+
+                src_sent = [''] + src_sent
+                tar_sent = ['NULL'] + tar_sent
+
+                pairs = []
+                for i, fi in enumerate(src_sent):
+                    if i == 0:
                         continue
 
-                    sent_index += 1
-                    src_sent = [''] + src_sent.split(' ')
-                    tar_sent = ['NULL'] + tar_sent.split(' ')
+                    max_prob = -1
+                    max_j = -1
 
-                    pairs = []
-                    for i, fi in enumerate(src_sent):
-                        if i == 0:
-                            continue
+                    for j, ej in enumerate(tar_sent):
+                        prob = t(fi, ej) if self.model_number == 1 else t(
+                            fi, ej) * q(j, i, l, m)
+                        if prob > max_prob:
+                            max_prob = prob
+                            max_j = j
 
-                        max_prob = -1
-                        max_j = -1
+                    if max_j != 0:
+                        pairs.append((max_j, i))
 
-                        for j, ej in enumerate(tar_sent):
-                            prob = t(fi, ej)
-                            if prob > max_prob:
-                                max_prob = prob
-                                max_j = j
+                pairs = sorted(
+                    pairs, key=lambda element: (element[0], element[1]))
 
-                        if max_j != 0:
-                            pairs.append((max_j, i))
+                result[sent_index] = {
+                    'pairs': pairs, 'foreign_length': m, 'tar_length': l}
 
-                    pairs = sorted(pairs, key=lambda element: (element[0], element[1]))
-
-                    for pair in pairs:
-                        output_file.write('{0} {1} {2}\n'.format(sent_index, pair[0], pair[1]))
+        return result
 
 
-def main(src_test_corpus, tar_test_corpus, out_alignment_file):
+def main(model_number, src_test_corpus, tar_test_corpus, out_alignment_file):
+    if model_number not in ['1', '2', '3']:
+        sys.exit(1)
+
+    model_number = int(model_number)
+
     source_corpus = './corpus.es'
     target_corpus = './corpus.en'
-    pickle_file = './tfe-1.pickle'
-    ibm_1 = IBM1(source_corpus, target_corpus, pickle_file)
 
-    ibm_1.align(src_test_corpus, tar_test_corpus, out_alignment_file)
+    if model_number in [1, 2]:
+        imb = IBM(source_corpus, target_corpus, model_number)
+
+        result = imb.align(src_test_corpus, tar_test_corpus)
+        open(out_alignment_file, 'w').close()
+        with open(out_alignment_file, 'w') as out_file:
+            for sent_index, values in result.iteritems():
+                pairs = values['pairs']
+                for pair in pairs:
+                    out_file.write(
+                        '{0} {1} {2}\n'.format(sent_index, pair[0], pair[1]))
+    else:
+        neighboring = [
+            (-1, 0), (0, -1), (1, 0), (0, 1), (-1, -1), (-1, 1), (1, -1), (1, 1)]
+
+        def get_neighbors(e_index, f_index, e_length, f_length):
+            neighbors = []
+            for neighbor in neighboring:
+                _e_index = e_index + neighbor[0]
+                _f_index = f_index + neighbor[1]
+
+                if _e_index >= 1 and _e_index <= e_length and _f_index >= 1 and _f_index <= f_length:
+                    neighbors.append((_e_index, _f_index))
+
+            return neighbors
+
+        print('Init ibm_fe')
+        imb_fe = IBM(source_corpus, target_corpus, model_number)
+        print('Init ibm_ef')
+        imb_ef = IBM(target_corpus, source_corpus, model_number)
+        print('Align FE')
+        result_fe = imb_fe.align(src_test_corpus, tar_test_corpus)
+        print('Align EF')
+        result_ef = imb_ef.align(tar_test_corpus, src_test_corpus)
+
+        open(out_alignment_file, 'w').close()
+        out_file = open(out_alignment_file, 'w')
+
+        for sent_index in result_fe:
+            pairs_fe = result_fe[sent_index]['pairs']
+            pairs_ef = result_ef[sent_index]['pairs']
+
+            foreign_length = result_fe[sent_index]['foreign_length']
+            target_length = result_fe[sent_index]['tar_length']
+
+            align_fe = numpy.zeros(
+                (target_length + 1, foreign_length + 1), dtype=numpy.bool)
+            align_ef = numpy.zeros(
+                (target_length + 1, foreign_length + 1), dtype=numpy.bool)
+
+            for pair in pairs_fe:
+                align_fe[pair] = True
+
+            for pair in pairs_ef:
+                align_ef[pair[::-1]] = True
+
+            alignment = align_fe * align_ef
+            union = align_fe + align_ef
+
+            # http://www.statmt.org/moses/?n=FactoredTraining.AlignWords
+            # Grow diag
+            while True:
+                for e in xrange(1, target_length + 1):
+                    for f in xrange(1, foreign_length + 1):
+                        if alignment[e, f]:
+                            neighbors = get_neighbors(
+                                e, f, target_length, foreign_length)
+                            for neighbor in neighbors:
+                                if (not numpy.any(alignment[e]) or not numpy.any(alignment[:, f])) and union[neighbor]:
+                                    alignment[neighbor] = True
+                else:
+                    break
+
+            # Final
+            for e in xrange(1, target_length + 1):
+                for f in xrange(1, foreign_length + 1):
+                    if (not numpy.any(alignment[e]) or not numpy.any(alignment[:, f])) and union[e, f]:
+                        alignment[e, f] = True
+
+            for e in xrange(1, target_length + 1):
+                for f in xrange(1, foreign_length + 1):
+                    if alignment[e, f]:
+                        out_file.write(
+                            '{0} {1} {2}\n'.format(sent_index, e, f))
+
+        out_file.close()
+
 
 if __name__ == '__main__':
     args = sys.argv
-    if len(args) < 4:
+    if len(args) < 5:
         sys.exit(1)
 
-    main(args[1], args[2], args[3])
+    main(args[1], args[2], args[3], args[4])
