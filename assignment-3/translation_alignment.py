@@ -131,13 +131,10 @@ class IBM(object):
 
         # Save trained parameters to pickle file
         t_file_name = ''
-        if self.model_number == 1:
+        if source_corpus.endswith('.es'):
             t_file_name = './tfe-1.pickle'
         else:
-            if source_corpus.endswith('.es'):
-                t_file_name = './tfe-2.pickle'
-            else:
-                t_file_name = './tef-2.pickle'
+            t_file_name = './tef-1.pickle'
 
         open(t_file_name, 'w').close()
         print('Save trained parameters to pickle file')
@@ -156,7 +153,7 @@ class IBM(object):
 
         # Should use the trained parameters from model 1
         # In case it does not exist, train it
-        t_file, q_file = self._get_pickle_files(source_corpus)
+        t_file = './tfe-1.pickle' if source_corpus.endswith('.es') else './tef-1.pickle'
         if exists(t_file) and isfile(t_file):
             with open(t_file) as f:
                 self.t = pickle.load(f)
@@ -296,7 +293,7 @@ class IBM(object):
                             max_prob = prob
                             max_j = j
 
-                    if max_j != 0:
+                    if max_j != 0 and i != 0:
                         pairs.append((max_j, i))
 
                 pairs = sorted(
@@ -338,7 +335,7 @@ def main(model_number, src_test_corpus, tar_test_corpus, out_alignment_file):
                 _e_index = e_index + neighbor[0]
                 _f_index = f_index + neighbor[1]
 
-                if _e_index >= 1 and _e_index <= e_length and _f_index >= 1 and _f_index <= f_length:
+                if 1 <= _e_index <= e_length and 1 <= _f_index <= f_length:
                     neighbors.append((_e_index, _f_index))
 
             return neighbors
@@ -379,15 +376,18 @@ def main(model_number, src_test_corpus, tar_test_corpus, out_alignment_file):
             # http://www.statmt.org/moses/?n=FactoredTraining.AlignWords
             # Grow diag
             while True:
+                has_new_point = False
                 for e in xrange(1, target_length + 1):
                     for f in xrange(1, foreign_length + 1):
                         if alignment[e, f]:
                             neighbors = get_neighbors(
                                 e, f, target_length, foreign_length)
                             for neighbor in neighbors:
-                                if (not numpy.any(alignment[e]) or not numpy.any(alignment[:, f])) and union[neighbor]:
+                                if (not numpy.any(alignment[neighbor[0]]) or not numpy.any(alignment[:, neighbor[1]])) and union[neighbor]:
                                     alignment[neighbor] = True
-                else:
+                                    has_new_point = True
+
+                if not has_new_point:
                     break
 
             # Final
